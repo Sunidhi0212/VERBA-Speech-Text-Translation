@@ -1,0 +1,268 @@
+import threading
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+# Translation
+from deep_translator import GoogleTranslator
+from deep_translator.constants import GOOGLE_LANGUAGES_TO_CODES
+
+# Speech I/O
+import speech_recognition as sr
+import pyttsx3
+
+
+class TranslatorApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Language Translator – Text + Voice")
+        self.geometry("980x640")
+        self.minsize(900, 600)
+        self.configure(bg="#0b1220")
+
+        self.engine = pyttsx3.init()
+        self.recognizer = sr.Recognizer()
+        self._listening = False
+
+        # Build language lists
+        self.lang_name_to_code = {k.title(): v for k, v in GOOGLE_LANGUAGES_TO_CODES.items()}
+        # Ensure 'Auto' at top for source
+        self.all_lang_names = sorted(self.lang_name_to_code.keys())
+        self.source_langs = ["Auto"] + self.all_lang_names
+        self.target_langs = self.all_lang_names
+
+        # Default selections
+        self.src_var = tk.StringVar(value="Auto")
+        self.dst_var = tk.StringVar(value="English")
+
+        # UI
+        self._build_widgets()
+
+    # ------------------------- UI -------------------------
+    def _build_widgets(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("TFrame", background="#0b1220")
+        style.configure("TLabel", background="#0b1220", foreground="#e6edf7")
+        style.configure("TButton", padding=8)
+        style.configure("TCombobox", fieldbackground="#0b1220", foreground="#e6edf7", selectforeground="#e6edf7", selectbackground="#1f2a44")
+
+        top = ttk.Frame(self)
+        top.pack(fill=tk.X, padx=16, pady=(16, 8))
+
+        # Source language
+        ttk.Label(top, text="From").grid(row=0, column=0, sticky="w")
+        self.src_combo = ttk.Combobox(top, textvariable=self.src_var, values=self.source_langs, width=24, state="readonly")
+        self.src_combo.grid(row=1, column=0, sticky="we", padx=(0, 12))
+
+        # Swap button
+        self.swap_btn = ttk.Button(top, text="⇄ Swap", command=self.swap_languages)
+        self.swap_btn.grid(row=1, column=1, padx=(0, 12))
+
+        # Target language
+        ttk.Label(top, text="To").grid(row=0, column=2, sticky="w")
+        self.dst_combo = ttk.Combobox(top, textvariable=self.dst_var, values=self.target_langs, width=24, state="readonly")
+        self.dst_combo.grid(row=1, column=2, sticky="we", padx=(0, 12))
+
+        # Translate button
+        self.translate_btn = ttk.Button(top, text="Translate", command=self.translate_clicked)
+        self.translate_btn.grid(row=1, column=3, padx=(0, 12))
+
+        # Speak button
+        self.speak_btn = ttk.Button(top, text="🔊 Speak Output", command=self.speak_output)
+        self.speak_btn.grid(row=1, column=4, padx=(0, 12))
+
+        # Clear button
+        self.clear_btn = ttk.Button(top, text="Clear", command=self.clear_all)
+        self.clear_btn.grid(row=1, column=5)
+
+        for i in range(6):
+            top.grid_columnconfigure(i, weight=1)
+
+        # Text areas
+        body = ttk.Frame(self)
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
+
+        self.src_text = tk.Text(body, wrap=tk.WORD, height=12, font=("Segoe UI", 11), bg="#0f172a", fg="#e6edf7", insertbackground="#e6edf7")
+        self.src_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 8))
+        self.src_text.insert("1.0", "Type or dictate your text here…")
+
+        self.dst_text = tk.Text(body, wrap=tk.WORD, height=12, font=("Segoe UI", 11), bg="#0f172a", fg="#c0e2ff", insertbackground="#e6edf7")
+        self.dst_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Bottom controls
+        bottom = ttk.Frame(self)
+        bottom.pack(fill=tk.X, padx=16, pady=(8, 16))
+
+        self.listen_btn = ttk.Button(bottom, text="🎤 Start Listening", command=self.toggle_listen)
+        self.listen_btn.pack(side=tk.LEFT)
+
+        self.status_var = tk.StringVar(value="Ready")
+        self.status = ttk.Label(bottom, textvariable=self.status_var)
+        self.status.pack(side=tk.RIGHT)
+
+    # ------------------------- Helpers -------------------------
+    def code_for_language(self, name: str) -> str:
+        if not name or name.lower() == "auto":
+            return "auto"
+        return self.lang_name_to_code.get(name.title(), name.lower())
+
+    def set_status(self, text: str):
+        self.status_var.set(text)
+        self.update_idletasks()
+
+    # ------------------------- Actions -------------------------
+    def swap_languages(self):
+        if self.src_var.get().lower() == "auto":
+            # Only swap if source is not Auto
+            if messagebox.askyesno("Swap Warning", "Source is set to Auto-detect. Swap anyway?"):
+                self.src_var.set(self.dst_var.get())
+                self.dst_var.set("English")
+        else:
+            s, d = self.src_var.get(), self.dst_var.get()
+            self.src_var.set(d)
+            self.dst_var.set(s)
+
+    def translate_clicked(self):
+        text = self.src_text.get("1.0", tk.END).strip()
+        if not text:
+            messagebox.showinfo("No input", "Please enter or dictate some text first.")
+            return
+        src_code = self.code_for_language(self.src_var.get())
+        dst_code = self.code_for_language(self.dst_var.get())
+
+        def worker():
+            try:
+                self.set_status("Translating…")
+                translated = GoogleTranslator(source=src_code, target=dst_code).translate(text)
+                self.dst_text.delete("1.0", tk.END)
+                self.dst_text.insert("1.0", translated)
+                self.set_status("Translated")
+            except Exception as e:
+                self.set_status("Error")
+                messagebox.showerror("Translation Error", str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # Map ISO 639-1 to a reasonable Google Speech BCP-47 locale
+    def _speech_locale(self, lang_code: str) -> str:
+        mapping = {
+            "en": "en-US",
+            "hi": "hi-IN",
+            "bn": "bn-IN",
+            "mr": "mr-IN",
+            "ta": "ta-IN",
+            "te": "te-IN",
+            "gu": "gu-IN",
+            "pa": "pa-IN",
+            "ur": "ur-PK",
+            "es": "es-ES",
+            "fr": "fr-FR",
+            "de": "de-DE",
+            "it": "it-IT",
+            "pt": "pt-PT",
+            "ru": "ru-RU",
+            "ja": "ja-JP",
+            "ko": "ko-KR",
+            "zh-cn": "zh-CN",
+            "zh-tw": "zh-TW",
+            "ar": "ar-SA",
+        }
+        lc = lang_code.lower()
+        return mapping.get(lc, f"{lc}")
+
+    def toggle_listen(self):
+        if self._listening:
+            # We only listen one utterance per click; no continuous mode here.
+            return
+        self._listening = True
+        self.listen_btn.configure(text="🎤 Listening…")
+
+        def worker():
+            try:
+                self.set_status("Adjusting mic…")
+                with sr.Microphone() as source:
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.6)
+                    self.set_status("Speak now…")
+                    audio = self.recognizer.listen(source, timeout=8, phrase_time_limit=20)
+                src_code = self.code_for_language(self.src_var.get())
+                locale = self._speech_locale(src_code if src_code != "auto" else "en")
+                self.set_status("Recognizing…")
+                text = self.recognizer.recognize_google(audio, language=locale)
+                existing = self.src_text.get("1.0", tk.END).strip()
+                prefix = (existing + "\n") if existing else ""
+                self.src_text.delete("1.0", tk.END)
+                self.src_text.insert("1.0", prefix + text)
+                self.set_status("Heard speech")
+            except sr.WaitTimeoutError:
+                self.set_status("Timeout")
+                messagebox.showwarning("Timeout", "I didn't hear anything. Please try again.")
+            except sr.UnknownValueError:
+                self.set_status("Couldn't understand")
+                messagebox.showwarning("No match", "Sorry, I couldn't understand the audio.")
+            except Exception as e:
+                self.set_status("Error")
+                messagebox.showerror("Mic Error", str(e))
+            finally:
+                self._listening = False
+                self.listen_btn.configure(text="🎤 Start Listening")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def speak_output(self):
+        text = self.dst_text.get("1.0", tk.END).strip()
+        if not text:
+            messagebox.showinfo("Nothing to speak", "Translate something first.")
+            return
+        dst_code = self.code_for_language(self.dst_var.get())
+        self._speak(text, dst_code)
+
+    def _speak(self, text: str, lang_code: str):
+        def best_voice(engine, lang_code: str):
+            # Try to select a voice that contains the language code
+            wanted = lang_code.lower()
+            try:
+                for v in engine.getProperty('voices'):
+                    # On Windows, v.languages may be [b'\x05en_US']; on others a list of strings
+                    langs = []
+                    if hasattr(v, 'languages') and v.languages:
+                        for item in v.languages:
+                            try:
+                                s = item.decode('utf-8') if isinstance(item, bytes) else str(item)
+                                langs.append(s.lower())
+                            except Exception:
+                                pass
+                    name = (v.name or "").lower()
+                    if wanted in " ".join(langs) or wanted in name:
+                        return v.id
+            except Exception:
+                pass
+            return None
+
+        def worker():
+            try:
+                self.set_status("Speaking…")
+                vid = best_voice(self.engine, lang_code)
+                if vid:
+                    self.engine.setProperty('voice', vid)
+                self.engine.stop()
+                self.engine.say(text)
+                self.engine.runAndWait()
+                self.set_status("Done speaking")
+            except Exception as e:
+                self.set_status("TTS error")
+                messagebox.showerror("TTS Error", str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def clear_all(self):
+        self.src_text.delete("1.0", tk.END)
+        self.dst_text.delete("1.0", tk.END)
+        self.set_status("Cleared")
+
+
+if __name__ == "__main__":
+    app = TranslatorApp()
+    app.mainloop()
